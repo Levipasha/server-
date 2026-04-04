@@ -50,19 +50,11 @@ const app = express();
 // (required by express-rate-limit to identify clients correctly)
 app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
 
-const allowedOrigins = (process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.split(',').map(s => s.trim()).filter(Boolean)
-  : ['http://localhost:3000', 'http://localhost:3001']
-);
-
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow non-browser requests (no Origin header)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
-  },
-  credentials: true
+  origin: true,                // reflect the request origin → allows ANY origin
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
 // Middleware (CORS first so preflights always get headers)
