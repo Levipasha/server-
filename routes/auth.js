@@ -225,18 +225,35 @@ router.post('/admin/request-otp', async (req, res) => {
   try {
     const { username } = req.body;
     
+    console.log('OTP Request received for username:', username);
+    console.log('Expected username:', process.env.ADMIN_USERNAME);
+    
     // Verify username is ARTLOVE
     if (username !== process.env.ADMIN_USERNAME) {
+      console.log('Invalid username provided');
       return res.status(401).json({ error: 'Invalid username' });
     }
     
     const adminEmail = process.env.ADMIN_EMAIL;
     if (!adminEmail) {
+      console.error('ADMIN_EMAIL not configured in .env');
       return res.status(500).json({ error: 'Admin email not configured' });
+    }
+    
+    // Check SMTP configuration
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.error('SMTP configuration missing:', {
+        user: process.env.SMTP_USER ? 'set' : 'missing',
+        pass: process.env.SMTP_PASS ? 'set' : 'missing'
+      });
+      return res.status(500).json({ 
+        error: 'Email service not configured. Please set SMTP_USER and SMTP_PASS in .env' 
+      });
     }
     
     // Generate OTP
     const otp = generateOTP();
+    console.log('Generated OTP:', otp, 'for email:', adminEmail);
     
     // Store OTP with expiration (10 minutes)
     otpStore.set(otp, {
@@ -246,15 +263,31 @@ router.post('/admin/request-otp', async (req, res) => {
     });
     
     // Send OTP email
-    await sendOTPEmail(adminEmail, otp);
+    try {
+      await sendOTPEmail(adminEmail, otp);
+      console.log('OTP email sent successfully to:', adminEmail);
+    } catch (emailError) {
+      console.error('Failed to send OTP email:', emailError.message);
+      // Still return the OTP in development mode for testing
+      if (process.env.NODE_ENV === 'development') {
+        return res.json({ 
+          message: 'OTP generated (email failed - check SMTP settings)',
+          email: adminEmail.replace(/(.{2}).*(@.*)/, '$1***$2'),
+          debugOtp: otp // Only for development testing
+        });
+      }
+      throw emailError;
+    }
     
     res.json({ 
       message: 'OTP sent successfully',
       email: adminEmail.replace(/(.{2}).*(@.*)/, '$1***$2') // Mask email for display
     });
   } catch (error) {
-    console.error('OTP request error:', error);
-    res.status(500).json({ error: 'Failed to send OTP' });
+    console.error('OTP request error:', error.message, error.stack);
+    res.status(500).json({ 
+      error: 'Failed to send OTP: ' + error.message 
+    });
   }
 });
 
