@@ -54,7 +54,7 @@ router.post('/login', verifyFirebaseToken, async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user._id, firebaseUid: user.firebaseUid },
+      { userId: user._id, firebaseUid: user.firebaseUid, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );

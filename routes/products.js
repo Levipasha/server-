@@ -37,8 +37,11 @@ router.get('/', async (req, res) => {
       status = 'available'
     } = req.query;
 
-    // Build query
-    const query = { status };
+    // Build query - 'all' shows every status (for admin), otherwise filter
+    const query = {};
+    if (status && status !== 'all') {
+      query.status = status;
+    }
     
     if (category) query.category = category;
     if (artist) query.artist = artist;
@@ -109,34 +112,35 @@ router.get('/:id', async (req, res) => {
 // Create new product (requires authentication)
 router.post('/', auth, upload.array('images', 5), async (req, res) => {
   try {
-    const productData = JSON.parse(req.body.productData);
-    
-    // Handle image uploads to Cloudinary
-    const imagePromises = req.files.map(async (file) => {
-      const result = await req.app.locals.cloudinary.uploader.upload_stream(
-        {
-          resource_type: 'image',
-          folder: 'art-marketplace/products',
-          transformation: [
-            { width: 800, height: 600, crop: 'fit', quality: 'auto' }
-          ]
-        },
-        (error, result) => {
-          if (error) throw error;
-          return result;
-        }
-      ).end(file.buffer);
+    const productData = req.body.productData ? JSON.parse(req.body.productData) : req.body;
 
-      return result;
-    });
+    // Upload images to Cloudinary using Promise wrapper
+    const uploadToCloudinary = (buffer) => {
+      return new Promise((resolve, reject) => {
+        const stream = req.app.locals.cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'image',
+            folder: 'art-marketplace/products',
+            transformation: [{ width: 800, height: 600, crop: 'fit', quality: 'auto' }]
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        stream.end(buffer);
+      });
+    };
 
-    const uploadedImages = await Promise.all(imagePromises);
-    
-    const images = uploadedImages.map(img => ({
-      url: img.secure_url,
-      publicId: img.public_id,
-      alt: productData.name
-    }));
+    let images = productData.images || [];
+    if (req.files && req.files.length > 0) {
+      const uploadedImages = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
+      images = uploadedImages.map(img => ({
+        url: img.secure_url,
+        publicId: img.public_id,
+        alt: productData.name || 'artwork'
+      }));
+    }
 
     const product = new Product({
       ...productData,
@@ -150,50 +154,43 @@ router.post('/', auth, upload.array('images', 5), async (req, res) => {
     res.status(201).json(product);
   } catch (error) {
     console.error('Create product error:', error);
-    res.status(500).json({ error: 'Failed to create product' });
+    res.status(500).json({ error: 'Failed to create product', message: error.message });
   }
 });
 
-// Update product (requires authentication and ownership)
+// Update product (requires authentication — admin can edit any, others only own)
 router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
-    
+
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    if (product.artist.toString() !== req.user.userId) {
+    // Allow admin to update any product; others only their own
+    if (req.user.role !== 'admin' && product.artist.toString() !== req.user.userId) {
       return res.status(403).json({ error: 'Not authorized to update this product' });
     }
 
-    const updates = JSON.parse(req.body.productData);
-    
-    // Handle new image uploads if any
+    const updates = req.body.productData ? JSON.parse(req.body.productData) : req.body;
+
+    // Upload new images using Promise wrapper
     if (req.files && req.files.length > 0) {
-      const imagePromises = req.files.map(async (file) => {
-        const result = await req.app.locals.cloudinary.uploader.upload_stream(
-          {
-            resource_type: 'image',
-            folder: 'art-marketplace/products'
-          },
-          (error, result) => {
-            if (error) throw error;
-            return result;
-          }
-        ).end(file.buffer);
-
-        return result;
-      });
-
-      const uploadedImages = await Promise.all(imagePromises);
-      
+      const uploadToCloudinary = (buffer) => {
+        return new Promise((resolve, reject) => {
+          const stream = req.app.locals.cloudinary.uploader.upload_stream(
+            { resource_type: 'image', folder: 'art-marketplace/products' },
+            (error, result) => { if (error) reject(error); else resolve(result); }
+          );
+          stream.end(buffer);
+        });
+      };
+      const uploadedImages = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
       const newImages = uploadedImages.map(img => ({
         url: img.secure_url,
         publicId: img.public_id,
         alt: updates.name || product.name
       }));
-
       updates.images = [...product.images, ...newImages];
     }
 
@@ -204,39 +201,38 @@ router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
     res.json(product);
   } catch (error) {
     console.error('Update product error:', error);
-    res.status(500).json({ error: 'Failed to update product' });
+    res.status(500).json({ error: 'Failed to update product', message: error.message });
   }
 });
 
-// Delete product (requires authentication and ownership)
+// Delete product (requires authentication — admin can delete any)
 router.delete('/:id', auth, async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
-    
+
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    if (product.artist.toString() !== req.user.userId) {
+    // Allow admin to delete any product; others only their own
+    if (req.user.role !== 'admin' && product.artist.toString() !== req.user.userId) {
       return res.status(403).json({ error: 'Not authorized to delete this product' });
     }
 
     // Delete images from Cloudinary
     if (product.images && product.images.length > 0) {
-      const deletePromises = product.images.map(async (image) => {
-        if (image.publicId) {
-          await req.app.locals.cloudinary.uploader.destroy(image.publicId);
-        }
-      });
-      await Promise.all(deletePromises);
+      await Promise.all(
+        product.images
+          .filter(img => img.publicId)
+          .map(img => req.app.locals.cloudinary.uploader.destroy(img.publicId))
+      );
     }
 
     await Product.findByIdAndDelete(req.params.id);
-
     res.json({ message: 'Product deleted successfully' });
   } catch (error) {
     console.error('Delete product error:', error);
-    res.status(500).json({ error: 'Failed to delete product' });
+    res.status(500).json({ error: 'Failed to delete product', message: error.message });
   }
 });
 

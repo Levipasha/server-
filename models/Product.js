@@ -13,7 +13,8 @@ const productSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['painting', 'sculpture', 'digital-art', 'photography', 'print', 'supplies', 'other']
+    enum: ['painting', 'sculpture', 'digital-art', 'photography', 'print', 'supplies', 'other',
+           'Painting', 'Sculpture', 'Digital Art', 'Photography', 'Print', 'Supplies', 'Other']
   },
   price: {
     type: Number,
@@ -124,6 +125,14 @@ const productSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  paymentLink: {
+    type: String,
+    default: ''
+  },
+  artistName: {
+    type: String,
+    default: ''
   }
 }, {
   timestamps: true
