@@ -472,6 +472,25 @@ router.post('/products/upload', adminAuth, upload.single('image'), async (req, r
   }
 });
 
+// Upload image for events (Admin -> Cloudinary)
+router.post('/events/upload', adminAuth, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const result = await uploadImage({
+      provider: 'cloudinary',
+      buffer: req.file.buffer,
+      mimetype: req.file.mimetype,
+      filename: req.file.originalname,
+      folder: 'admin-events',
+      cloudinary: req.app.locals.cloudinary
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Event image upload error:', error);
+    res.status(500).json({ error: 'Failed to upload' });
+  }
+});
+
 router.put('/gallery/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;

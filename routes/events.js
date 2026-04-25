@@ -35,8 +35,11 @@ router.get('/', async (req, res) => {
       status = 'published'
     } = req.query;
 
-    // Build query
-    const query = { status };
+    // Build query - 'all' shows every status (for admin), otherwise filter
+    const query = {};
+    if (status && status !== 'all') {
+      query.status = status;
+    }
     
     if (category) query.category = category;
     if (city) query['location.city'] = new RegExp(city, 'i');
@@ -45,9 +48,6 @@ router.get('/', async (req, res) => {
     if (search) {
       query.$text = { $search: search };
     }
-
-    // Filter events that haven't ended
-    query['date.start'] = { $gte: new Date() };
 
     // Sort options
     const sort = {};
@@ -104,34 +104,35 @@ router.get('/:id', async (req, res) => {
 // Create new event (requires authentication)
 router.post('/', auth, upload.array('images', 5), async (req, res) => {
   try {
-    const eventData = JSON.parse(req.body.eventData);
+    const eventData = req.body.eventData ? JSON.parse(req.body.eventData) : req.body;
     
-    // Handle image uploads to Cloudinary
-    const imagePromises = req.files.map(async (file) => {
-      const result = await req.app.locals.cloudinary.uploader.upload_stream(
-        {
-          resource_type: 'image',
-          folder: 'art-marketplace/events',
-          transformation: [
-            { width: 1200, height: 630, crop: 'fit', quality: 'auto' }
-          ]
-        },
-        (error, result) => {
-          if (error) throw error;
-          return result;
-        }
-      ).end(file.buffer);
+    // Upload images to Cloudinary using Promise wrapper
+    const uploadToCloudinary = (buffer) => {
+      return new Promise((resolve, reject) => {
+        const stream = req.app.locals.cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'image',
+            folder: 'art-marketplace/events',
+            transformation: [{ width: 1200, height: 630, crop: 'fit', quality: 'auto' }]
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        stream.end(buffer);
+      });
+    };
 
-      return result;
-    });
-
-    const uploadedImages = await Promise.all(imagePromises);
-    
-    const images = uploadedImages.map(img => ({
-      url: img.secure_url,
-      publicId: img.public_id,
-      alt: eventData.title
-    }));
+    let images = eventData.images || [];
+    if (req.files && req.files.length > 0) {
+      const uploadedImages = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
+      images = uploadedImages.map(img => ({
+        url: img.secure_url,
+        publicId: img.public_id,
+        alt: eventData.title || 'event image'
+      }));
+    }
 
     const event = new Event({
       ...eventData,
@@ -145,11 +146,11 @@ router.post('/', auth, upload.array('images', 5), async (req, res) => {
     res.status(201).json(event);
   } catch (error) {
     console.error('Create event error:', error);
-    res.status(500).json({ error: 'Failed to create event' });
+    res.status(500).json({ error: 'Failed to create event', message: error.message });
   }
 });
 
-// Update event (requires authentication and ownership)
+// Update event (requires authentication - admin can edit any)
 router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
@@ -158,37 +159,29 @@ router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    if (event.organizer.toString() !== req.user.userId) {
+    if (req.user.role !== 'admin' && event.organizer.toString() !== req.user.userId) {
       return res.status(403).json({ error: 'Not authorized to update this event' });
     }
 
-    const updates = JSON.parse(req.body.eventData);
+    const updates = req.body.eventData ? JSON.parse(req.body.eventData) : req.body;
     
-    // Handle new image uploads if any
+    // Upload new images using Promise wrapper
     if (req.files && req.files.length > 0) {
-      const imagePromises = req.files.map(async (file) => {
-        const result = await req.app.locals.cloudinary.uploader.upload_stream(
-          {
-            resource_type: 'image',
-            folder: 'art-marketplace/events'
-          },
-          (error, result) => {
-            if (error) throw error;
-            return result;
-          }
-        ).end(file.buffer);
-
-        return result;
-      });
-
-      const uploadedImages = await Promise.all(imagePromises);
-      
+      const uploadToCloudinary = (buffer) => {
+        return new Promise((resolve, reject) => {
+          const stream = req.app.locals.cloudinary.uploader.upload_stream(
+            { resource_type: 'image', folder: 'art-marketplace/events' },
+            (error, result) => { if (error) reject(error); else resolve(result); }
+          );
+          stream.end(buffer);
+        });
+      };
+      const uploadedImages = await Promise.all(req.files.map(f => uploadToCloudinary(f.buffer)));
       const newImages = uploadedImages.map(img => ({
         url: img.secure_url,
         publicId: img.public_id,
         alt: updates.title || event.title
       }));
-
       updates.images = [...event.images, ...newImages];
     }
 
@@ -199,11 +192,11 @@ router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
     res.json(event);
   } catch (error) {
     console.error('Update event error:', error);
-    res.status(500).json({ error: 'Failed to update event' });
+    res.status(500).json({ error: 'Failed to update event', message: error.message });
   }
 });
 
-// Delete event (requires authentication and ownership)
+// Delete event (requires authentication - admin can delete any)
 router.delete('/:id', auth, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
@@ -212,18 +205,17 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    if (event.organizer.toString() !== req.user.userId) {
+    if (req.user.role !== 'admin' && event.organizer.toString() !== req.user.userId) {
       return res.status(403).json({ error: 'Not authorized to delete this event' });
     }
 
     // Delete images from Cloudinary
     if (event.images && event.images.length > 0) {
-      const deletePromises = event.images.map(async (image) => {
-        if (image.publicId) {
-          await req.app.locals.cloudinary.uploader.destroy(image.publicId);
-        }
-      });
-      await Promise.all(deletePromises);
+      await Promise.all(
+        event.images
+          .filter(img => img.publicId)
+          .map(img => req.app.locals.cloudinary.uploader.destroy(img.publicId))
+      );
     }
 
     await Event.findByIdAndDelete(req.params.id);
@@ -231,7 +223,7 @@ router.delete('/:id', auth, async (req, res) => {
     res.json({ message: 'Event deleted successfully' });
   } catch (error) {
     console.error('Delete event error:', error);
-    res.status(500).json({ error: 'Failed to delete event' });
+    res.status(500).json({ error: 'Failed to delete event', message: error.message });
   }
 });
 
