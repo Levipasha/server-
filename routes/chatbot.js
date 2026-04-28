@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const fetch = require('node-fetch');
 const ArtistProfile = require('../models/ArtistProfile');
 const Event = require('../models/Event');
 const Product = require('../models/Product');
@@ -23,6 +24,29 @@ router.post('/chat', async (req, res) => {
         message: 'Please configure OPENROUTER_API_KEY in server/.env'
       });
     }
+
+    // Default system prompt if not configured
+    const defaultPrompt = `You are an intelligent AI assistant for an artist platform called ArtArtist.
+Response Style:
+- Friendly but professional
+- Short paragraphs or bullet points
+- No unnecessary explanations
+
+Context Handling:
+You will receive dynamic data from backend in this format:
+{
+  "artists": [...],
+  "events": [...],
+  "artworks": [...]
+}
+
+Use this data strictly to answer.
+
+If user asks something outside artist platform:
+→ Politely redirect to artist-related topics.
+
+Goal:
+Provide accurate, helpful, and database-driven responses like a smart art assistant.`;
 
     // Fetch relevant data from database based on message content
     const lowerMessage = message.toLowerCase();
@@ -147,38 +171,76 @@ router.post('/chat', async (req, res) => {
 
     // Prepare messages for OpenRouter
     const messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'system', content: JSON.stringify(contextData) },
+      { role: 'system', content: systemPrompt || defaultPrompt },
+      { role: 'system', content: `Available data: ${JSON.stringify(contextData)}` },
       { role: 'user', content: message }
     ];
 
     // Call OpenRouter API
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openrouterApiKey}`,
-        'HTTP-Referer': 'http://localhost:3000',
-        'X-OpenRouter-Title': 'ArtArtist'
-      },
-      body: JSON.stringify({
-        model: 'openai/gpt-3.5-turbo',
-        messages: messages,
-        max_tokens: 500,
-        temperature: 0.7
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('OpenRouter API error:', errorData);
+    console.log('Calling OpenRouter API with key:', openrouterApiKey.substring(0, 10) + '...');
+    
+    let response;
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openrouterApiKey}`,
+          'HTTP-Referer': (process.env.FRONTEND_URL && process.env.FRONTEND_URL.split(',')[0]) || 'https://artafd.vercel.app',
+          'X-Title': 'ArtArtist'
+        },
+        body: JSON.stringify({
+          model: 'openai/gpt-4o-mini',
+          messages: messages,
+          max_tokens: 500,
+          temperature: 0.7
+        })
+      });
+    } catch (fetchError) {
+      console.error('Fetch error:', fetchError);
       return res.status(500).json({
-        error: 'Failed to get response from AI',
-        details: errorData.error?.message || 'Unknown error'
+        error: 'Failed to connect to AI service',
+        details: fetchError.message
       });
     }
 
-    const data = await response.json();
+    console.log('OpenRouter response status:', response.status);
+    
+    if (!response.ok) {
+      let errorData;
+      try {
+        errorData = await response.json();
+      } catch (e) {
+        errorData = { error: { message: await response.text() } };
+      }
+      console.error('OpenRouter API error:', errorData);
+      return res.status(500).json({
+        error: 'Failed to get response from AI',
+        details: (errorData.error && errorData.error.message) || errorData.message || 'Unknown error'
+      });
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      console.error('Failed to parse OpenRouter response:', parseError);
+      const rawText = await response.text();
+      console.error('Raw response:', rawText.substring(0, 500));
+      return res.status(500).json({
+        error: 'Invalid response from AI service',
+        details: 'Failed to parse JSON response'
+      });
+    }
+    
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error('Unexpected OpenRouter response structure:', data);
+      return res.status(500).json({
+        error: 'Invalid response from AI service',
+        details: 'Missing choices in response'
+      });
+    }
+    
     const aiResponse = data.choices[0].message.content;
 
     res.json({ 
@@ -192,9 +254,11 @@ router.post('/chat', async (req, res) => {
 
   } catch (error) {
     console.error('Chatbot error:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       error: 'Internal server error',
-      message: error.message
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -202,14 +266,36 @@ router.post('/chat', async (req, res) => {
 // GET /api/chatbot/health - Check if chatbot is configured
 router.get('/health', (req, res) => {
   const hasPrompt = !!process.env.ARTIST_CHATBOT_PROMPT;
-  const hasApiKey = process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY !== 'your-openrouter-api-key-here';
+  const rawKey = process.env.OPENROUTER_API_KEY || '';
+  const hasApiKey = rawKey && rawKey !== 'your-openrouter-api-key-here' && rawKey.startsWith('sk-or-v1-');
+  const keyPrefix = hasApiKey ? rawKey.substring(0, 15) + '...' : 'none';
 
   res.json({
     configured: hasPrompt && hasApiKey,
     hasPrompt,
     hasApiKey,
+    keyPrefix,
+    nodeEnv: process.env.NODE_ENV,
     message: !hasApiKey ? 'Please configure OPENROUTER_API_KEY in server/.env' : 'Chatbot is ready'
   });
+});
+
+// POST /api/chatbot/test - Simple test without OpenRouter
+router.post('/test', async (req, res) => {
+  try {
+    const { message } = req.body;
+    console.log('Test endpoint called with message:', message);
+    
+    // Simple echo response for testing
+    res.json({
+      response: `Test echo: ${message}`,
+      test: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Test error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 module.exports = router;
