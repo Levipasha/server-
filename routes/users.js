@@ -2,12 +2,12 @@ const express = require('express');
 const User = require('../models/User');
 const Product = require('../models/Product');
 const Event = require('../models/Event');
-const auth = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
 // Get user's profile
-router.get('/profile', auth, async (req, res) => {
+router.get('/profile', authenticate, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId)
       .select('-firebaseUid');
@@ -24,7 +24,7 @@ router.get('/profile', auth, async (req, res) => {
 });
 
 // Update user's profile
-router.put('/profile', auth, async (req, res) => {
+router.put('/profile', authenticate, async (req, res) => {
   try {
     const updates = req.body;
     const user = await User.findByIdAndUpdate(
@@ -45,7 +45,7 @@ router.put('/profile', auth, async (req, res) => {
 });
 
 // Get user's products
-router.get('/products', auth, async (req, res) => {
+router.get('/products', authenticate, async (req, res) => {
   try {
     const {
       page = 1,
@@ -85,7 +85,7 @@ router.get('/products', auth, async (req, res) => {
 });
 
 // Get user's events
-router.get('/events', auth, async (req, res) => {
+router.get('/events', authenticate, async (req, res) => {
   try {
     const {
       page = 1,
@@ -125,7 +125,7 @@ router.get('/events', auth, async (req, res) => {
 });
 
 // Get user's registered events
-router.get('/registered-events', auth, async (req, res) => {
+router.get('/registered-events', authenticate, async (req, res) => {
   try {
     const {
       page = 1,
@@ -165,7 +165,7 @@ router.get('/registered-events', auth, async (req, res) => {
 });
 
 // Get user's liked products
-router.get('/liked-products', auth, async (req, res) => {
+router.get('/liked-products', authenticate, async (req, res) => {
   try {
     const {
       page = 1,
@@ -255,7 +255,7 @@ router.get('/search', async (req, res) => {
 });
 
 // Get user statistics
-router.get('/stats', auth, async (req, res) => {
+router.get('/stats', authenticate, async (req, res) => {
   try {
     const userId = req.user.userId;
 

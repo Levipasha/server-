@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const auth = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { uploadImage } = require('../services/mediaStorage');
 
 const router = express.Router();
@@ -9,38 +9,26 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'image/gif') {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'), false);
+      cb(new Error('Only image files (including GIF) are allowed'), false);
     }
   }
 });
 
 // Upload single image
-router.post('/image', auth, upload.single('image'), async (req, res) => {
+router.post('/image', authenticate, upload.single('image'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-    const provider = process.env.BUNNY_STORAGE_ZONE ? 'bunny' : 'cloudinary';
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await uploadImage({
-      provider,
       buffer: req.file.buffer,
       mimetype: req.file.mimetype,
       filename: req.file.originalname,
-      folder: 'website',
-      cloudinary: req.app.locals.cloudinary,
-      bunny: {
-        storageZone: process.env.BUNNY_STORAGE_ZONE,
-        accessKey: process.env.BUNNY_STORAGE_ACCESS_KEY,
-        cdnBaseUrl: process.env.BUNNY_CDN_BASE_URL,
-        storageHost: process.env.BUNNY_STORAGE_HOST,
-        pathPrefix: process.env.BUNNY_PATH_PREFIX || 'art-marketplace'
-      }
+      folder: 'website'
     });
 
     res.json(result);
@@ -51,28 +39,18 @@ router.post('/image', auth, upload.single('image'), async (req, res) => {
 });
 
 // Upload multiple images
-router.post('/images', auth, upload.array('images', 5), async (req, res) => {
+router.post('/images', authenticate, upload.array('images', 5), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
-    const provider = process.env.BUNNY_STORAGE_ZONE ? 'bunny' : 'cloudinary';
     const results = await Promise.all(
       req.files.map((file) =>
         uploadImage({
-          provider,
           buffer: file.buffer,
           mimetype: file.mimetype,
           filename: file.originalname,
-          folder: 'website',
-          cloudinary: req.app.locals.cloudinary,
-          bunny: {
-            storageZone: process.env.BUNNY_STORAGE_ZONE,
-            accessKey: process.env.BUNNY_STORAGE_ACCESS_KEY,
-            cdnBaseUrl: process.env.BUNNY_CDN_BASE_URL,
-            storageHost: process.env.BUNNY_STORAGE_HOST,
-            pathPrefix: process.env.BUNNY_PATH_PREFIX || 'art-marketplace'
-          }
+          folder: 'website'
         })
       )
     );
@@ -84,12 +62,13 @@ router.post('/images', auth, upload.array('images', 5), async (req, res) => {
   }
 });
 
-// Delete image
-router.delete('/image/:publicId', auth, async (req, res) => {
+const cloudinary = require('cloudinary').v2;
+
+router.delete('/image/:publicId', authenticate, async (req, res) => {
   try {
     const { publicId } = req.params;
     
-    await req.app.locals.cloudinary.uploader.destroy(publicId);
+    await cloudinary.uploader.destroy(publicId);
     
     res.json({ message: 'Image deleted successfully' });
   } catch (error) {

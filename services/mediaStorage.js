@@ -1,73 +1,49 @@
 const https = require('https');
+const cloudinary = require('cloudinary').v2;
 
-function cloudinaryUploadStream(cloudinary, options, buffer) {
+// Configure cloudinary directly from environment
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true
+});
+
+async function cloudinaryUpload(options, filePath, buffer) {
+  const source = filePath || `data:${options.mimetype || 'image/png'};base64,${buffer.toString('base64')}`;
+  
   return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(options, (err, result) => {
-      if (err) return reject(err);
-      resolve(result);
-    });
-    stream.end(buffer);
+    cloudinary.uploader.upload(
+      source,
+      { 
+        ...options, 
+        resource_type: 'auto'
+      },
+      (err, result) => {
+        if (err) {
+          console.error('Cloudinary upload error:', err);
+          return reject(err);
+        }
+        resolve(result);
+      }
+    );
   });
 }
 
-function randomKey(prefix, originalName = 'upload') {
-  const safe = String(originalName).replace(/[^a-z0-9._-]/gi, '-').toLowerCase();
-  return `${prefix}/${Date.now()}-${Math.random().toString(16).slice(2)}-${safe}`;
-}
-
-async function uploadImage({ provider, buffer, mimetype, filename, folder, cloudinary, bunny }) {
-  if (provider === 'bunny') {
-    const {
-      storageZone,
-      accessKey,
-      cdnBaseUrl,
-      storageHost = 'storage.bunnycdn.com',
-      pathPrefix = 'art-marketplace'
-    } = bunny || {};
-
-    if (!storageZone || !accessKey || !cdnBaseUrl) {
-      throw new Error('Bunny storage is not configured (missing BUNNY_* env vars)');
-    }
-
-    const key = randomKey(`${pathPrefix}/${folder || 'general'}`, filename);
-    const putPath = `/${encodeURIComponent(storageZone)}/${key}`;
-
-    await new Promise((resolve, reject) => {
-      const req = https.request(
-        {
-          method: 'PUT',
-          hostname: storageHost,
-          path: putPath,
-          headers: {
-            AccessKey: accessKey,
-            'Content-Type': mimetype || 'application/octet-stream',
-            'Content-Length': buffer.length
-          }
-        },
-        (res) => {
-          const ok = res.statusCode && res.statusCode >= 200 && res.statusCode < 300;
-          if (!ok) return reject(new Error(`Bunny upload failed (${res.statusCode})`));
-          resolve();
-        }
-      );
-      req.on('error', reject);
-      req.write(buffer);
-      req.end();
-    });
-
-    return {
-      url: `${cdnBaseUrl.replace(/\/$/, '')}/${key}`,
-      publicId: key
-    };
+async function uploadImage({ buffer, mimetype, filename, folder, filePath }) {
+  console.log(`Uploading image to Cloudinary: folder=${folder}, filename=${filename}`);
+  
+  if (!process.env.CLOUDINARY_CLOUD_NAME) {
+    throw new Error('Cloudinary is not configured in .env');
   }
 
-  // default: cloudinary
-  const result = await cloudinaryUploadStream(
-    cloudinary,
+  const result = await cloudinaryUpload(
     {
       resource_type: 'image',
+      mimetype: mimetype,
       folder: folder ? `art-marketplace/${folder}` : 'art-marketplace/general'
     },
+    filePath,
     buffer
   );
 
