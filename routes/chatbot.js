@@ -176,28 +176,49 @@ Provide accurate, helpful, and database-driven responses like a smart art assist
       { role: 'user', content: message }
     ];
 
+    // Debug logging
+    console.log('Chatbot request:', { message: message.substring(0, 50), hasKey: !!openrouterApiKey });
+    
+    // Mock mode for testing (set CHATBOT_MOCK=true in .env)
+    if (process.env.CHATBOT_MOCK === 'true') {
+      console.log('Mock mode enabled, returning test response');
+      return res.json({
+        response: `Mock response: I received your message "${message}". Artists: ${contextData.artists.length}, Events: ${contextData.events.length}, Artworks: ${contextData.artworks.length}`,
+        context: {
+          artistsCount: contextData.artists.length,
+          eventsCount: contextData.events.length,
+          artworksCount: contextData.artworks.length
+        },
+        mock: true
+      });
+    }
+
     // Call OpenRouter API
-    console.log('Calling OpenRouter API with key:', openrouterApiKey.substring(0, 10) + '...');
+    console.log('Calling OpenRouter API...');
     
     let response;
     try {
+      const requestBody = {
+        model: 'openai/gpt-4o-mini',
+        messages: messages,
+        max_tokens: 500,
+        temperature: 0.7
+      };
+      console.log('Request body:', JSON.stringify(requestBody).substring(0, 200));
+      
       response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openrouterApiKey}`,
-          'HTTP-Referer': (process.env.FRONTEND_URL && process.env.FRONTEND_URL.split(',')[0]) || 'https://artafd.vercel.app',
+          'Authorization': 'Bearer ' + openrouterApiKey,
+          'HTTP-Referer': 'https://artafd.vercel.app',
           'X-Title': 'ArtArtist'
         },
-        body: JSON.stringify({
-          model: 'openai/gpt-4o-mini',
-          messages: messages,
-          max_tokens: 500,
-          temperature: 0.7
-        })
+        body: JSON.stringify(requestBody)
       });
     } catch (fetchError) {
-      console.error('Fetch error:', fetchError);
+      console.error('Fetch error:', fetchError.message);
+      console.error('Fetch error stack:', fetchError.stack);
       return res.status(500).json({
         error: 'Failed to connect to AI service',
         details: fetchError.message
