@@ -92,7 +92,7 @@ const corsOptions = {
   origin: true,                // reflect the request origin → allows ANY origin
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'],
 };
 
 // Middleware (CORS first so preflights always get headers)
