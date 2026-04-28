@@ -5,18 +5,32 @@ const Product = require('../models/Product');
 const Event = require('../models/Event');
 const GalleryItem = require('../models/GalleryItem');
 const ArtistProfile = require('../models/ArtistProfile');
-const auth = require('../middleware/auth');
+const SiteSettings = require('../models/SiteSettings');
+const { authenticate } = require('../middleware/auth');
 const multer = require('multer');
 const { uploadImage } = require('../services/mediaStorage');
 
 const router = express.Router();
 
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const tempDir = path.join(os.tmpdir(), 'art-marketplace-uploads');
+      if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+      cb(null, tempDir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `${Date.now()}-${file.originalname}`);
+    }
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) return cb(null, true);
-    cb(new Error('Only image files are allowed'), false);
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'image/gif') return cb(null, true);
+    cb(new Error('Only image files (including GIF) are allowed'), false);
   }
 });
 
@@ -26,7 +40,7 @@ const adminAuth = async (req, res, next) => {
     return next();
   }
   try {
-    await auth(req, res, () => {
+    await authenticate(req, res, () => {
       if (req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Admin access required' });
       }
@@ -36,6 +50,46 @@ const adminAuth = async (req, res, next) => {
     res.status(401).json({ error: 'Authentication failed' });
   }
 };
+
+// Test Cloudinary Connection
+router.get('/test-cloudinary', adminAuth, async (req, res) => {
+  try {
+    const cloudinary = require('cloudinary').v2;
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET
+    });
+    
+    console.log('Pinging Cloudinary...');
+    const pingResult = await cloudinary.api.ping();
+    
+    console.log('Testing small upload...');
+    // 1x1 transparent pixel
+    const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const uploadResult = await cloudinary.uploader.upload(pixel, {
+      folder: 'test',
+      timeout: 30000
+    });
+    
+    res.json({ 
+      status: 'ok', 
+      ping: pingResult,
+      upload: 'Success',
+      publicId: uploadResult.public_id,
+      url: uploadResult.secure_url
+    });
+  } catch (error) {
+    console.error('Cloudinary test error:', error);
+    res.status(500).json({ 
+      error: 'Cloudinary test failed', 
+      message: error.message,
+      http_code: error.http_code,
+      name: error.name,
+      details: error
+    });
+  }
+});
 
 // Get admin dashboard stats
 router.get('/dashboard', adminAuth, async (req, res) => {
@@ -355,19 +409,8 @@ router.delete('/events/:id', adminAuth, async (req, res) => {
 // System Settings
 router.get('/settings', adminAuth, async (req, res) => {
   try {
-    // This would typically come from a settings collection
-    const settings = {
-      siteName: 'ArtArtist',
-      siteDescription: 'A vibrant community for artists to showcase, connect, and grow',
-      maintenanceMode: false,
-      allowRegistrations: true,
-      maxUploadSize: '10MB',
-      supportedImageFormats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
-      currency: 'USD',
-      timezone: 'Asia/Kolkata'
-    };
-
-    res.json(settings);
+    const settings = await SiteSettings.getSingleton();
+    res.json(settings.toObject());
   } catch (error) {
     console.error('Get settings error:', error);
     res.status(500).json({ error: 'Failed to fetch settings' });
@@ -376,9 +419,17 @@ router.get('/settings', adminAuth, async (req, res) => {
 
 router.put('/settings', adminAuth, async (req, res) => {
   try {
-    const settings = req.body;
-    // TODO: Save settings to database
-    res.json({ message: 'Settings updated successfully', settings });
+    const updates = req.body;
+    const settings = await SiteSettings.getSingleton();
+    // Allowed fields for security
+    const allowedFields = ['siteName', 'siteDescription', 'maintenanceMode', 'allowRegistrations', 'maxUploadSize', 'supportedImageFormats', 'currency', 'timezone'];
+    Object.keys(updates).forEach(key => {
+      if (allowedFields.includes(key)) {
+        settings[key] = updates[key];
+      }
+    });
+    await settings.save();
+    res.json({ message: 'Settings updated successfully', settings: settings.toObject() });
   } catch (error) {
     console.error('Update settings error:', error);
     res.status(500).json({ error: 'Failed to update settings' });
@@ -439,17 +490,25 @@ router.post('/gallery/upload', adminAuth, upload.single('image'), async (req, re
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await uploadImage({
-      provider: 'cloudinary',
-      buffer: req.file.buffer,
+      filePath: req.file.path,
       mimetype: req.file.mimetype,
       filename: req.file.originalname,
-      folder: 'admin-gallery',
-      cloudinary: req.app.locals.cloudinary
+      folder: 'admin-gallery'
     });
     res.json(result);
   } catch (error) {
     console.error('Gallery upload error:', error);
-    res.status(500).json({ error: 'Failed to upload' });
+    res.status(500).json({ 
+      error: 'Failed to upload',
+      message: error.message,
+      details: error
+    });
+  } finally {
+    if (req.file && req.file.path) {
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
   }
 });
 
@@ -458,17 +517,25 @@ router.post('/products/upload', adminAuth, upload.single('image'), async (req, r
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await uploadImage({
-      provider: 'cloudinary',
-      buffer: req.file.buffer,
+      filePath: req.file.path,
       mimetype: req.file.mimetype,
       filename: req.file.originalname,
-      folder: 'admin-products',
-      cloudinary: req.app.locals.cloudinary
+      folder: 'admin-products'
     });
     res.json(result);
   } catch (error) {
     console.error('Product image upload error:', error);
-    res.status(500).json({ error: 'Failed to upload' });
+    res.status(500).json({ 
+      error: 'Failed to upload',
+      message: error.message,
+      details: error
+    });
+  } finally {
+    if (req.file && req.file.path) {
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
   }
 });
 
@@ -477,17 +544,52 @@ router.post('/events/upload', adminAuth, upload.single('image'), async (req, res
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await uploadImage({
-      provider: 'cloudinary',
-      buffer: req.file.buffer,
+      filePath: req.file.path,
       mimetype: req.file.mimetype,
       filename: req.file.originalname,
-      folder: 'admin-events',
-      cloudinary: req.app.locals.cloudinary
+      folder: 'admin-events'
     });
     res.json(result);
   } catch (error) {
     console.error('Event image upload error:', error);
-    res.status(500).json({ error: 'Failed to upload' });
+    res.status(500).json({ 
+      error: 'Failed to upload',
+      message: error.message,
+      details: error
+    });
+  } finally {
+    if (req.file && req.file.path) {
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
+  }
+});
+
+// Upload image for announcements/hero (Admin -> Cloudinary)
+router.post('/announcements/upload', adminAuth, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const result = await uploadImage({
+      filePath: req.file.path,
+      mimetype: req.file.mimetype,
+      filename: req.file.originalname,
+      folder: 'admin-announcements'
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Announcement image upload error:', error);
+    res.status(500).json({ 
+      error: 'Failed to upload',
+      message: error.message,
+      details: error
+    });
+  } finally {
+    if (req.file && req.file.path) {
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
   }
 });
 
@@ -669,17 +771,25 @@ router.post('/artists/upload', adminAuth, upload.single('image'), async (req, re
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await uploadImage({
-      provider: 'cloudinary',
-      buffer: req.file.buffer,
+      filePath: req.file.path,
       mimetype: req.file.mimetype,
       filename: req.file.originalname,
-      folder: 'admin-artists',
-      cloudinary: req.app.locals.cloudinary
+      folder: 'admin-artists'
     });
     res.json(result);
   } catch (error) {
     console.error('Artist image upload error:', error);
-    res.status(500).json({ error: 'Failed to upload' });
+    res.status(500).json({ 
+      error: 'Failed to upload',
+      message: error.message,
+      details: error
+    });
+  } finally {
+    if (req.file && req.file.path) {
+      fs.unlink(req.file.path, (err) => {
+        if (err) console.error('Failed to delete temp file:', err);
+      });
+    }
   }
 });
 

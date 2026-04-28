@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const Product = require('../models/Product');
-const auth = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -110,7 +110,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Create new product (requires authentication)
-router.post('/', auth, upload.array('images', 5), async (req, res) => {
+router.post('/', authenticate, upload.array('images', 5), async (req, res) => {
   try {
     const productData = req.body.productData ? JSON.parse(req.body.productData) : req.body;
 
@@ -159,7 +159,7 @@ router.post('/', auth, upload.array('images', 5), async (req, res) => {
 });
 
 // Update product (requires authentication — admin can edit any, others only own)
-router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
+router.put('/:id', authenticate, upload.array('images', 5), async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
 
@@ -206,7 +206,7 @@ router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
 });
 
 // Delete product (requires authentication — admin can delete any)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', authenticate, async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
 
@@ -237,7 +237,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // Like/unlike product
-router.post('/:id/like', auth, async (req, res) => {
+router.post('/:id/like', authenticate, async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     
@@ -265,7 +265,7 @@ router.post('/:id/like', auth, async (req, res) => {
 });
 
 // Add review to product
-router.post('/:id/reviews', auth, async (req, res) => {
+router.post('/:id/reviews', authenticate, async (req, res) => {
   try {
     const { rating, comment } = req.body;
     const product = await Product.findById(req.params.id);

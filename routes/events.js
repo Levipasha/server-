@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const Event = require('../models/Event');
-const auth = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -102,7 +102,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Create new event (requires authentication)
-router.post('/', auth, upload.array('images', 5), async (req, res) => {
+router.post('/', authenticate, upload.array('images', 5), async (req, res) => {
   try {
     const eventData = req.body.eventData ? JSON.parse(req.body.eventData) : req.body;
     
@@ -151,7 +151,7 @@ router.post('/', auth, upload.array('images', 5), async (req, res) => {
 });
 
 // Update event (requires authentication - admin can edit any)
-router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
+router.put('/:id', authenticate, upload.array('images', 5), async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     
@@ -197,7 +197,7 @@ router.put('/:id', auth, upload.array('images', 5), async (req, res) => {
 });
 
 // Delete event (requires authentication - admin can delete any)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', authenticate, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     
@@ -228,7 +228,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // Register for event
-router.post('/:id/register', auth, async (req, res) => {
+router.post('/:id/register', authenticate, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     
@@ -270,7 +270,7 @@ router.post('/:id/register', auth, async (req, res) => {
 });
 
 // Unregister from event
-router.delete('/:id/register', auth, async (req, res) => {
+router.delete('/:id/register', authenticate, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     
@@ -301,7 +301,7 @@ router.delete('/:id/register', auth, async (req, res) => {
 });
 
 // Add review to event
-router.post('/:id/reviews', auth, async (req, res) => {
+router.post('/:id/reviews', authenticate, async (req, res) => {
   try {
     const { rating, comment } = req.body;
     const event = await Event.findById(req.params.id);

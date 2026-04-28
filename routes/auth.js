@@ -83,7 +83,7 @@ const sendOTPEmail = async (email, otp) => {
   await transporter.sendMail(mailOptions);
 };
 
-// Middleware to verify Firebase token (mocked for development)
+// Middleware to verify Firebase token
 const verifyFirebaseToken = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -91,19 +91,40 @@ const verifyFirebaseToken = async (req, res, next) => {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    // For development, accept any token and create a mock user
-    // TODO: Replace with real Firebase verification when you have credentials
-    const decodedToken = {
-      uid: 'mock-user-' + Math.random().toString(36).substr(2, 9),
-      email: 'user@example.com',
-      displayName: 'Demo User'
+    // Get Firebase admin instance from app locals
+    const firebaseAdmin = req.app.locals.firebase;
+    const firebaseReady = req.app.locals.firebaseInitialized;
+
+    if (!firebaseReady || !firebaseAdmin) {
+      // Only log once per process start, not on every request
+      if (!verifyFirebaseToken._warnedOnce) {
+        console.warn(
+          '⚠️  Firebase Admin is not initialized. Login/signup is disabled.\n' +
+          '   Add real Firebase service account credentials to server/.env to enable it.'
+        );
+        verifyFirebaseToken._warnedOnce = true;
+      }
+      return res.status(503).json({
+        error: 'Authentication service unavailable',
+        detail: 'Firebase Admin credentials are not configured on the server.'
+      });
+    }
+
+    // Verify the Firebase token
+    const decodedToken = await firebaseAdmin.auth().verifyIdToken(token);
+
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      displayName: decodedToken.name || decodedToken.email?.split('@')[0] || 'User',
+      photoURL: decodedToken.picture || null
     };
-    
-    req.user = decodedToken;
+
     next();
   } catch (error) {
-    console.error('Firebase token verification error:', error);
-    res.status(401).json({ error: 'Invalid token' });
+    // Only log actual verification failures, not config errors
+    console.error('Firebase token verification error:', error.message);
+    res.status(401).json({ error: 'Invalid or expired token' });
   }
 };
 
