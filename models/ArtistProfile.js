@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const artistProfileSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+    email: { type: String, trim: true, lowercase: true, default: '' },
+    phone: { type: String, trim: true, default: '' },
     image: {
       url: { type: String, required: true, trim: true },
       publicId: { type: String, default: null },
@@ -32,6 +34,7 @@ const artistProfileSchema = new mongoose.Schema(
 
 artistProfileSchema.index({ name: 'text', artForm: 'text', bio: 'text' });
 artistProfileSchema.index({ isActive: 1, createdAt: -1 });
+artistProfileSchema.index({ email: 1 }, { unique: true, sparse: true }); // sparse allows null/empty emails
 
 module.exports = mongoose.model('ArtistProfile', artistProfileSchema);
 

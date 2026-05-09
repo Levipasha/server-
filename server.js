@@ -80,6 +80,7 @@ const artistRoutes = require('./routes/artists');
 const announcementRoutes = require('./routes/announcements');
 const sitemapRoutes = require('./routes/sitemap');
 const chatbotRoutes = require('./routes/chatbot');
+const formRoutes = require('./routes/forms');
 const SiteSettings = require('./models/SiteSettings');
 
 const app = express();
@@ -135,6 +136,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/chatbot', chatbotRoutes);
+app.use('/api/forms', formRoutes);
 app.use('/', sitemapRoutes);
 
 // Health check

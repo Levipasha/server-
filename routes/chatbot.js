@@ -211,7 +211,7 @@ Provide accurate, helpful, and database-driven responses like a smart art assist
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ' + openrouterApiKey,
-          'HTTP-Referer': 'https://artafd.vercel.app',
+          'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://artafd.vercel.app',
           'X-Title': 'ArtArtist'
         },
         body: JSON.stringify(requestBody)

@@ -33,6 +33,7 @@ router.get('/', async (req, res) => {
       sortBy = 'createdAt',
       sortOrder = 'desc',
       artist,
+      artistProfile,
       featured,
       status = 'available'
     } = req.query;
@@ -45,6 +46,7 @@ router.get('/', async (req, res) => {
     
     if (category) query.category = category;
     if (artist) query.artist = artist;
+    if (artistProfile) query.artistProfile = artistProfile;
     if (featured) query.featured = featured === 'true';
     
     if (minPrice || maxPrice) {

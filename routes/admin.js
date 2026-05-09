@@ -1,5 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const User = require('../models/User');
 const Product = require('../models/Product');
 const Event = require('../models/Event');
@@ -9,6 +10,8 @@ const SiteSettings = require('../models/SiteSettings');
 const { authenticate } = require('../middleware/auth');
 const multer = require('multer');
 const { uploadImage } = require('../services/mediaStorage');
+const { parseCSV } = require('../utils/csvParser');
+const { artistInviteEmail, bulkAnnouncementEmail } = require('../utils/emailTemplates');
 
 const router = express.Router();
 
@@ -49,6 +52,34 @@ const adminAuth = async (req, res, next) => {
   } catch (error) {
     res.status(401).json({ error: 'Authentication failed' });
   }
+};
+
+// Email transporter for admin notifications
+const createTransporter = () => {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+};
+
+const sendArtistInviteEmail = async (artistName, email) => {
+  const dashboardUrl = process.env.ARTIST_DASHBOARD_URL || 'https://artist.artartist.com';
+  const transporter = createTransporter();
+  const mailOptions = {
+    from: `"ArtArtist" <${process.env.SMTP_USER}>`,
+    to: email,
+    subject: 'Welcome to ArtArtist — Your Artist Dashboard is Ready',
+    html: artistInviteEmail(artistName, email, dashboardUrl)
+  };
+  await transporter.sendMail(mailOptions);
 };
 
 // Test Cloudinary Connection
@@ -670,12 +701,16 @@ router.get('/artists', adminAuth, async (req, res) => {
 router.post('/artists', adminAuth, async (req, res) => {
   try {
     const payload = req.body || {};
+    console.log('Create artist payload:', { name: payload.name, email: payload.email, phone: payload.phone });
+    
     if (!payload.name || !payload.imageUrl || !payload.artForm) {
       return res.status(400).json({ error: 'name, imageUrl and artForm are required' });
     }
 
     const artist = await ArtistProfile.create({
       name: String(payload.name).trim(),
+      email: String(payload.email || '').trim().toLowerCase(),
+      phone: String(payload.phone || '').trim(),
       image: {
         url: String(payload.imageUrl).trim(),
         alt: String(payload.imageAlt || '').trim(),
@@ -700,11 +735,13 @@ router.post('/artists', adminAuth, async (req, res) => {
       bio: String(payload.bio || '').trim(),
       isActive: Boolean(payload.isActive ?? true)
     });
+    
+    console.log('Created artist:', { id: artist._id, email: artist.email, phone: artist.phone });
 
     res.status(201).json(artist);
   } catch (error) {
     console.error('Create artist error:', error);
-    res.status(500).json({ error: 'Failed to create artist' });
+    res.status(500).json({ error: 'Failed to create artist', details: error.message });
   }
 });
 
@@ -712,8 +749,14 @@ router.put('/artists/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const p = req.body || {};
+    
+    // Debug logging
+    console.log('Update artist payload:', { id, email: p.email, phone: p.phone });
+    
     const updates = {
       ...(typeof p.name !== 'undefined' ? { name: String(p.name).trim() } : {}),
+      ...(typeof p.email !== 'undefined' ? { email: String(p.email).trim().toLowerCase() } : {}),
+      ...(typeof p.phone !== 'undefined' ? { phone: String(p.phone).trim() } : {}),
       ...(typeof p.artForm !== 'undefined' ? { artForm: String(p.artForm).trim() } : {}),
       ...(typeof p.teamRole !== 'undefined' ? { teamRole: String(p.teamRole).trim() } : {}),
       ...(typeof p.isTeamMember !== 'undefined' ? { isTeamMember: Boolean(p.isTeamMember) } : {}),
@@ -741,6 +784,8 @@ router.put('/artists/:id', adminAuth, async (req, res) => {
         website: String(p.website || '').trim()
       }
     };
+    
+    console.log('Update artist updates object:', updates);
 
     const artist = await ArtistProfile.findByIdAndUpdate(
       id,
@@ -748,10 +793,12 @@ router.put('/artists/:id', adminAuth, async (req, res) => {
       { new: true, runValidators: true }
     );
     if (!artist) return res.status(404).json({ error: 'Artist not found' });
+    
+    console.log('Updated artist:', { id: artist._id, email: artist.email, phone: artist.phone });
     res.json(artist);
   } catch (error) {
     console.error('Update artist error:', error);
-    res.status(500).json({ error: 'Failed to update artist' });
+    res.status(500).json({ error: 'Failed to update artist', details: error.message });
   }
 });
 
@@ -779,7 +826,7 @@ router.post('/artists/upload', adminAuth, upload.single('image'), async (req, re
     res.json(result);
   } catch (error) {
     console.error('Artist image upload error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to upload',
       message: error.message,
       details: error
@@ -790,6 +837,264 @@ router.post('/artists/upload', adminAuth, upload.single('image'), async (req, re
         if (err) console.error('Failed to delete temp file:', err);
       });
     }
+  }
+});
+
+// Bulk CSV artist upload with invite emails
+router.post('/artists/bulk-upload', adminAuth, async (req, res) => {
+  try {
+    const { csvText, sendEmails = true } = req.body || {};
+    if (!csvText || typeof csvText !== 'string') {
+      return res.status(400).json({ error: 'CSV text is required' });
+    }
+
+    const rows = parseCSV(csvText);
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'CSV is empty or malformed' });
+    }
+
+    const results = {
+      created: [],
+      updated: [],
+      failed: [],
+      emailsSent: 0,
+      emailsFailed: 0
+    };
+
+    // Normalize CSV headers based on user's format: ID, name, instagram, artform, Mob#, Email, Location
+    for (const row of rows) {
+      try {
+        const id = row.id || row.ID || '';
+        const name = row.name || row.Name || row.NAME || '';
+        const instagram = row.instagram || row.Instagram || row.INSTAGRAM || '';
+        const artForm = row.artform || row.artForm || row.ArtForm || row['art form'] || row['Art Form'] || '';
+        const phone = row.mob || row['mob#'] || row.Mob || row['Mob#'] || row.phone || row.Phone || row.PHONE || '';
+        const email = row.email || row.Email || row.EMAIL || '';
+        const locationRaw = row.location || row.Location || row.LOCATION || '';
+
+        if (!name || !email) {
+          results.failed.push({ row, reason: 'name and email are required' });
+          continue;
+        }
+
+        // Parse location into city/state/country (e.g., "Hyderabad" or "Hyderabad, Telangana, India")
+        const locParts = locationRaw.split(',').map((s) => s.trim());
+        const location = {
+          city: locParts[0] || '',
+          state: locParts[1] || '',
+          country: locParts[2] || ''
+        };
+
+        const social = {
+          instagram: instagram,
+          facebook: '',
+          twitter: '',
+          linkedin: '',
+          website: ''
+        };
+
+        // Default placeholder image until they upload one
+        const defaultImage = {
+          url: 'https://images.pexels.com/photos/196644/pexels-photo-196644.jpeg',
+          alt: name,
+          publicId: null
+        };
+
+        let artist;
+        let isNew = false;
+
+        if (id && id.trim()) {
+          // Try to update existing artist by custom ID reference (email is the real key)
+          artist = await ArtistProfile.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            {
+              $set: {
+                name: name.trim(),
+                artForm: artForm.trim() || 'Artist',
+                phone: phone.trim(),
+                email: email.trim().toLowerCase(),
+                location,
+                social,
+                isActive: true
+              }
+            },
+            { new: true }
+          );
+        }
+
+        if (!artist) {
+          // Check if artist exists by email
+          artist = await ArtistProfile.findOne({ email: email.toLowerCase() });
+        }
+
+        if (artist) {
+          // Update existing
+          artist.name = name.trim();
+          artist.artForm = artForm.trim() || artist.artForm || 'Artist';
+          artist.phone = phone.trim();
+          artist.location = location;
+          artist.social = { ...artist.social, ...social };
+          artist.isActive = true;
+          await artist.save();
+          results.updated.push({ id: artist._id, name: artist.name, email: artist.email });
+        } else {
+          // Create new
+          artist = await ArtistProfile.create({
+            name: name.trim(),
+            email: email.trim().toLowerCase(),
+            phone: phone.trim(),
+            artForm: artForm.trim() || 'Artist',
+            image: defaultImage,
+            location,
+            social,
+            bio: '',
+            isActive: true
+          });
+          isNew = true;
+          results.created.push({ id: artist._id, name: artist.name, email: artist.email });
+        }
+
+        // Send invite email
+        if (sendEmails && artist.email) {
+          try {
+            await sendArtistInviteEmail(artist.name, artist.email);
+            results.emailsSent++;
+          } catch (emailErr) {
+            console.error('Failed to send invite email to', artist.email, emailErr.message);
+            results.emailsFailed++;
+          }
+        }
+      } catch (rowErr) {
+        console.error('Bulk upload row error:', rowErr);
+        results.failed.push({ row, reason: rowErr.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      summary: {
+        total: rows.length,
+        created: results.created.length,
+        updated: results.updated.length,
+        failed: results.failed.length,
+        emailsSent: results.emailsSent,
+        emailsFailed: results.emailsFailed
+      },
+      results
+    });
+  } catch (error) {
+    console.error('Bulk upload error:', error);
+    res.status(500).json({ error: 'Bulk upload failed', details: error.message });
+  }
+});
+
+// Bulk announcement email to all users/artists
+router.post('/announcements/bulk-email', adminAuth, async (req, res) => {
+  try {
+    const { subject, message, includeEvents = false, targetAudience = 'all' } = req.body || {};
+
+    if (!subject || !message) {
+      return res.status(400).json({ error: 'Subject and message are required' });
+    }
+
+    // Build recipient query based on target audience
+    let recipientQuery = {};
+    if (targetAudience === 'artists') {
+      // Get emails from ArtistProfile collection
+      const artists = await ArtistProfile.find({ isActive: true }).select('email name').lean();
+      const artistEmails = artists.map(a => a.email).filter(Boolean);
+
+      // Also include users with artist role
+      const artistUsers = await User.find({ role: 'artist', isActive: true }).select('email displayName').lean();
+      const userEmails = artistUsers.map(u => u.email).filter(Boolean);
+
+      const allArtistEmails = [...new Set([...artistEmails, ...userEmails])];
+
+      if (allArtistEmails.length === 0) {
+        return res.status(400).json({ error: 'No artist recipients found' });
+      }
+
+      recipientQuery = { email: { $in: allArtistEmails } };
+    } else if (targetAudience === 'users') {
+      recipientQuery = { role: 'user', isActive: true };
+    } else {
+      // all - get all active users and artists
+      recipientQuery = { isActive: true };
+    }
+
+    // Fetch recipients
+    const recipients = await User.find(recipientQuery).select('email displayName').lean();
+    const emails = recipients.map(r => r.email).filter(Boolean);
+
+    // Also get artist profiles not linked to User accounts
+    if (targetAudience === 'all' || targetAudience === 'artists') {
+      const artistProfiles = await ArtistProfile.find({ isActive: true }).select('email name').lean();
+      const profileEmails = artistProfiles.map(a => a.email).filter(Boolean);
+      emails.push(...profileEmails);
+    }
+
+    // Deduplicate emails
+    const uniqueEmails = [...new Set(emails)];
+
+    if (uniqueEmails.length === 0) {
+      return res.status(400).json({ error: 'No recipients found' });
+    }
+
+    // Fetch upcoming events if requested
+    let events = [];
+    if (includeEvents) {
+      const now = new Date();
+      events = await Event.find({
+        status: 'published',
+        'date.end': { $gte: now }
+      })
+        .sort({ 'date.start': 1 })
+        .limit(3)
+        .select('title description category date location images')
+        .lean();
+    }
+
+    // Send emails
+    const transporter = createTransporter();
+    let sent = 0;
+    let failed = 0;
+    const failedEmails = [];
+
+    // Send in batches to avoid overwhelming the SMTP server
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < uniqueEmails.length; i += BATCH_SIZE) {
+      const batch = uniqueEmails.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (email) => {
+          try {
+            await transporter.sendMail({
+              from: `"ArtArtist" <${process.env.SMTP_USER}>`,
+              to: email,
+              subject: subject,
+              html: bulkAnnouncementEmail(subject, message, events)
+            });
+            sent++;
+          } catch (err) {
+            console.error('Failed to send announcement to', email, err.message);
+            failed++;
+            failedEmails.push({ email, error: err.message });
+          }
+        })
+      );
+    }
+
+    res.json({
+      success: true,
+      summary: {
+        total: uniqueEmails.length,
+        sent,
+        failed
+      },
+      failedEmails: failedEmails.slice(0, 10) // Limit failed details
+    });
+  } catch (error) {
+    console.error('Bulk announcement email error:', error);
+    res.status(500).json({ error: 'Failed to send bulk announcement', details: error.message });
   }
 });
 
