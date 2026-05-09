@@ -98,6 +98,8 @@ const corsOptions = {
     const allowedOrigins = [
       'https://artiest-dashbaord.vercel.app',
       'https://art-love-website.vercel.app',
+      'https://www.artartist.in',
+      'https://artartist.in',
       'http://localhost:3000',
       'http://localhost:5173',
       'http://localhost:5174',
