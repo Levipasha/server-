@@ -90,10 +90,40 @@ const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
 
 const corsOptions = {
-  origin: true,                // reflect the request origin → allows ANY origin
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // List of allowed origins
+    const allowedOrigins = [
+      'https://artiest-dashbaord.vercel.app',
+      'https://art-love-website.vercel.app',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:5174'
+    ];
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // For development, allow any origin
+      if (process.env.NODE_ENV === 'development') {
+        console.log('CORS: Allowing origin in development:', origin);
+        callback(null, true);
+      } else {
+        console.log('CORS: Blocking origin:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 };
 
 // Middleware (CORS first so preflights always get headers)
