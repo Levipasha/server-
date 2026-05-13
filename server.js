@@ -93,6 +93,7 @@ const announcementRoutes = require('./routes/announcements');
 const sitemapRoutes = require('./routes/sitemap');
 const chatbotRoutes = require('./routes/chatbot');
 const formRoutes = require('./routes/forms');
+const messageRoutes = require('./routes/messages');
 const SiteSettings = require('./models/SiteSettings');
 
 const app = express();
@@ -232,6 +233,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 app.use('/api/forms', formRoutes);
+app.use('/api/messages', messageRoutes);
 app.use('/', sitemapRoutes);
 
 // Health check
@@ -269,7 +271,15 @@ app.use('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
+const http = require('http');
+const { initSocket } = require('./services/socketService');
+
+const server = http.createServer(app);
+
+// Initialize Socket.io
+initSocket(server);
+
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV}`);
 });

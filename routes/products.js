@@ -9,7 +9,7 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 2 * 1024 * 1024, // 2MB limit
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -116,6 +116,41 @@ router.post('/', authenticate, upload.array('images', 5), async (req, res) => {
   try {
     const productData = req.body.productData ? JSON.parse(req.body.productData) : req.body;
 
+    // Fetch user to get email
+    const User = require('../models/User');
+    const ArtistProfile = require('../models/ArtistProfile');
+    const user = await User.findById(req.user.userId);
+    
+    let artistProfileId = productData.artistProfile;
+    
+    // If no artistProfile provided, try to find one by user email
+    if (!artistProfileId && user) {
+      const profile = await ArtistProfile.findOne({ email: user.email.toLowerCase() });
+      if (profile) {
+        artistProfileId = profile._id;
+      }
+    }
+
+    // Check artwork limit (3 per artist)
+    if (artistProfileId) {
+      const artworkCount = await Product.countDocuments({ artistProfile: artistProfileId });
+      if (artworkCount >= 3) {
+        return res.status(400).json({ 
+          error: 'Upload limit reached', 
+          message: 'Each artist can upload a maximum of 3 artworks. Please delete an existing artwork to upload a new one.' 
+        });
+      }
+    } else if (req.user.role !== 'admin') {
+      // If no profile found and not admin, check by userId
+      const artworkCount = await Product.countDocuments({ artist: req.user.userId });
+      if (artworkCount >= 3) {
+        return res.status(400).json({ 
+          error: 'Upload limit reached', 
+          message: 'Each artist can upload a maximum of 3 artworks.' 
+        });
+      }
+    }
+
     // Upload images to Cloudinary using Promise wrapper
     const uploadToCloudinary = (buffer) => {
       return new Promise((resolve, reject) => {
@@ -147,11 +182,16 @@ router.post('/', authenticate, upload.array('images', 5), async (req, res) => {
     const product = new Product({
       ...productData,
       images,
-      artist: req.user.userId
+      artist: req.user.userId,
+      artistProfile: artistProfileId,
+      artistName: user ? user.displayName : productData.artistName
     });
 
     await product.save();
     await product.populate('artist', 'displayName photoURL');
+    if (artistProfileId) {
+      await product.populate('artistProfile', 'name image artForm location');
+    }
 
     res.status(201).json(product);
   } catch (error) {
@@ -176,6 +216,19 @@ router.put('/:id', authenticate, upload.array('images', 5), async (req, res) => 
 
     const updates = req.body.productData ? JSON.parse(req.body.productData) : req.body;
 
+    // Automatically link artistProfile if missing
+    if (!product.artistProfile || !updates.artistProfile) {
+      const User = require('../models/User');
+      const ArtistProfile = require('../models/ArtistProfile');
+      const user = await User.findById(req.user.userId);
+      if (user) {
+        const profile = await ArtistProfile.findOne({ email: user.email.toLowerCase() });
+        if (profile) {
+          updates.artistProfile = profile._id;
+        }
+      }
+    }
+
     // Upload new images using Promise wrapper
     if (req.files && req.files.length > 0) {
       const uploadToCloudinary = (buffer) => {
@@ -193,12 +246,15 @@ router.put('/:id', authenticate, upload.array('images', 5), async (req, res) => 
         publicId: img.public_id,
         alt: updates.name || product.name
       }));
-      updates.images = [...product.images, ...newImages];
+      updates.images = [...(product.images || []), ...newImages];
     }
 
     Object.assign(product, updates);
     await product.save();
     await product.populate('artist', 'displayName photoURL');
+    if (product.artistProfile) {
+      await product.populate('artistProfile', 'name image artForm location');
+    }
 
     res.json(product);
   } catch (error) {

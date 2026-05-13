@@ -231,9 +231,17 @@ router.post('/login/verify-otp', async (req, res) => {
     // Clear OTP after successful verification
     artistOtpStore.delete(emailLower);
 
+    // Find associated User document for attribution
+    const User = require('../models/User');
+    const user = await User.findOne({ email: emailLower });
+
     // Generate JWT token
     const token = jwt.sign(
-      { artistId: artist._id, email: artist.email },
+      { 
+        artistId: artist._id, 
+        userId: user ? user._id : null, // Include userId for attribution in general routes
+        email: artist.email 
+      },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -244,6 +252,7 @@ router.post('/login/verify-otp', async (req, res) => {
       token,
       artist: {
         _id: artist._id,
+        userId: user ? user._id : null,
         name: artist.name,
         email: artist.email,
         artForm: artist.artForm,
