@@ -274,6 +274,83 @@ router.delete('/users/:id', adminAuth, async (req, res) => {
   }
 });
 
+// Promote user to artist
+router.post('/users/:id/promote', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { artistNumber } = req.body;
+
+    if (!artistNumber || !artistNumber.trim()) {
+      return res.status(400).json({ error: 'Artist ID is required' });
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.role === 'admin') {
+      return res.status(400).json({ error: 'Cannot promote an admin user' });
+    }
+
+    // Check if Artist ID is already taken
+    const existingArtistByNumber = await ArtistProfile.findOne({ artistNumber: artistNumber.trim() });
+    if (existingArtistByNumber) {
+      return res.status(400).json({ error: `Artist ID "${artistNumber}" is already in use by another artist` });
+    }
+
+    // Update User role
+    user.role = 'artist';
+    await user.save();
+
+    // Check if ArtistProfile already exists
+    let artistProfile = await ArtistProfile.findOne({ email: user.email.toLowerCase() });
+    if (!artistProfile) {
+      // Generate unique username
+      const baseUsername = user.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+      let username = baseUsername;
+      let attempts = 0;
+      while ((await ArtistProfile.findOne({ username })) && attempts < 10) {
+        username = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
+        attempts++;
+      }
+
+      artistProfile = await ArtistProfile.create({
+        artistNumber: artistNumber.trim(),
+        name: user.displayName || 'Artist',
+        email: user.email.toLowerCase(),
+        username,
+        phone: '',
+        artForm: 'Mixed Media',
+        image: getDefaultArtistImage(user.displayName || 'Artist'),
+        location: { city: '', state: '', country: '' },
+        social: { instagram: '', facebook: '', twitter: '', linkedin: '', website: '' },
+        bio: '',
+        isActive: true
+      });
+    } else {
+      // Update existing profile's artist number and set active
+      artistProfile.artistNumber = artistNumber.trim();
+      artistProfile.isActive = true;
+      await artistProfile.save();
+    }
+
+    // Send onboarding/invite email
+    if (artistProfile.email) {
+      try {
+        await sendArtistInviteEmail(artistProfile.name, artistProfile.email);
+      } catch (emailErr) {
+        console.error('Failed to send invite email to promoted artist:', emailErr);
+      }
+    }
+
+    res.json({ message: 'User promoted to artist successfully', user, artistProfile });
+  } catch (error) {
+    console.error('Promote user error:', error);
+    res.status(500).json({ error: 'Failed to promote user' });
+  }
+});
+
 // Product Management
 router.get('/products', adminAuth, async (req, res) => {
   try {
